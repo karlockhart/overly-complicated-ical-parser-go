@@ -18,10 +18,10 @@ type node struct {
 
 // Calendar represents an ICal2 Calendar.
 type Calendar struct {
-	Version  string
-	ProdID   string
-	CalScale string
-	Events   []*Event
+	Version  string   `json:"version"`
+	ProdID   string   `json:"prod_id"`
+	CalScale string   `json:"cal_scale"`
+	Events   []*Event `json:"events"`
 	curr     *Event
 }
 
@@ -38,14 +38,14 @@ func (c *Calendar) populate(t string, val string) {
 
 // Event represents an ICal2 Event.
 type Event struct {
-	StartDate   time.Time
-	EndDate     time.Time
-	DateStamp   time.Time
-	UID         string
-	Summary     string
-	Description string
-	Location    string
-	URL         string
+	StartDate   time.Time `json:"start_date"`
+	EndDate     time.Time `json:"end_date"`
+	DateStamp   time.Time `json:"datestamp"`
+	UID         string    `json:"uid"`
+	Summary     string    `json:"summary"`
+	Description string    `json:"description"`
+	Location    string    `json:"location"`
+	URL         string    `json:"url"`
 }
 
 func parseTime(in string) time.Time {
@@ -103,9 +103,10 @@ func (p *node) addExistingChild(pat string, n *node) *node {
 }
 
 func splitElement(in string) string {
-	parts := strings.Split(in, ":")
-	if len(parts) > 1 {
-		return parts[1]
+	idx := strings.Index(in, ":")
+
+	if idx >= 0 && idx+1 <= len(in) {
+		return in[idx+1 : len(in)]
 	}
 
 	panic("Could not parse value.")
@@ -165,10 +166,8 @@ func trimToFirstDirective(in string) string {
 	return in[idx : len(in)-1]
 }
 
-// ParseIcal2Url parses an ICal2 url into a Calendar.
-func ParseIcal2Url(url string) (*Calendar, error) {
-	curr := initialize()
-
+// ParseICal2Url parses an iCal2 URL into a Calendar.
+func ParseICal2Url(url string) (*Calendar, error) {
 	resp, err := http.Get(url)
 
 	if err != nil {
@@ -178,11 +177,21 @@ func ParseIcal2Url(url string) (*Calendar, error) {
 	defer resp.Body.Close()
 
 	bytes, err := ioutil.ReadAll(resp.Body)
-	s := trimToFirstDirective(preprocessICal2String(string(bytes)))
+
+	return ParseICal2String(string(bytes))
+}
+
+// ParseICal2String parses an ICal2 url into a Calendar.
+func ParseICal2String(str string) (*Calendar, error) {
+	var err error
+	curr := initialize()
+
+	s := trimToFirstDirective(preprocessICal2String(str))
 	lines := strings.Split(s, "\n")
 	c := new(Calendar)
 
 	for _, l := range lines {
+
 		s := strings.TrimSpace(l)
 		// This is a state transition.
 		if _, ok := curr.children[s]; ok {
