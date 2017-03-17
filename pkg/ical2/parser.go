@@ -3,7 +3,11 @@ package ical2
 import "net/http"
 
 import "io/ioutil"
-import "log"
+
+import "strings"
+import "time"
+
+const dateLayout string = "20060102T150405Z"
 
 type node struct {
 	children  map[string]*node
@@ -34,9 +38,9 @@ func (c *Calendar) populate(t string, val string) {
 
 // Event represents an ICal2 Event.
 type Event struct {
-	StartDate   int64
-	EndDate     int64
-	DateStamp   int64
+	StartDate   time.Time
+	EndDate     time.Time
+	DateStamp   time.Time
 	UID         string
 	Summary     string
 	Description string
@@ -44,14 +48,23 @@ type Event struct {
 	URL         string
 }
 
+func parseTime(in string) time.Time {
+	t, err := time.Parse(dateLayout, in)
+	if err != nil {
+		panic(err)
+	}
+
+	return t
+}
+
 func (e *Event) populate(t string, val string) {
 	switch t {
 	case "DTSTART":
-		e.StartDate = 111
+		e.StartDate = parseTime(val)
 	case "DTEND":
-		e.EndDate = 111
+		e.EndDate = parseTime(val)
 	case "DTSTAMP":
-		e.DateStamp = 111
+		e.DateStamp = parseTime(val)
 	case "UID":
 		e.UID = val
 	case "SUMMARY":
@@ -79,18 +92,33 @@ func (p *node) addChild(pat string, ext []func(in string) string, pFunc func(c *
 	c.prev = p
 	c.extractor = ext
 	c.populate = pFunc
+	c.children = make(map[string]*node)
 	p.children[pat] = c
 	return c
 }
 
+func (p *node) addExistingChild(pat string, n *node) *node {
+	p.children[pat] = n
+	return n
+}
+
 func splitElement(in string) string {
-	return "blah"
+	parts := strings.Split(in, ":")
+	if len(parts) > 1 {
+		return parts[1]
+	}
+
+	panic("Could not parse value.")
 }
 
 func createEvent(c *Calendar, t string, val string) *Calendar {
 	e := new(Event)
 	c.Events = append(c.Events, e)
 	c.curr = e
+	return c
+}
+
+func noOp(c *Calendar, t string, val string) *Calendar {
 	return c
 }
 
@@ -104,10 +132,11 @@ func populateEvent(c *Calendar, t string, val string) *Calendar {
 	return c
 }
 
-func initialize() {
+func initialize() *node {
 	root := new(node)
 	root.children = make(map[string]*node)
 	curr := root.addChild("BEGIN:VCALENDAR", nil, nil)
+	start := *curr
 	splitOnlyChain := []func(in string) string{splitElement}
 	curr.addChild("VERSION", splitOnlyChain, populateCalendar)
 	curr.addChild("PRODID", splitOnlyChain, populateCalendar)
@@ -120,29 +149,62 @@ func initialize() {
 	curr.addChild("DESCRIPTION", splitOnlyChain, populateEvent)
 	curr.addChild("LOCATION", splitOnlyChain, populateEvent)
 	curr.addChild("URL", splitOnlyChain, populateEvent)
-	curr = curr.addChild("END:VEVENT", nil, createEvent)
-	curr = curr.addChild("END:VCALENDAR", nil, nil)
+	curr = curr.addChild("END:VEVENT", nil, noOp)
+	curr.addExistingChild("BEGIN:VEVENT", curr.prev)
+	curr = curr.addChild("END:VCALENDAR", nil, noOp)
+
+	return &start
 }
 
-type populatable interface {
-	populate(string, string)
+func preprocessICal2String(in string) string {
+	return strings.TrimSpace(strings.Replace(in, "\\n", " ", -1))
+}
+
+func trimToFirstDirective(in string) string {
+	idx := strings.Index(in, "BEGIN:VCALENDAR")
+	return in[idx : len(in)-1]
 }
 
 // ParseIcal2Url parses an ICal2 url into a Calendar.
-func ParseIcal2Url(url string) error {
-	initialize()
+func ParseIcal2Url(url string) (*Calendar, error) {
+	curr := initialize()
 
 	resp, err := http.Get(url)
 
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	defer resp.Body.Close()
 
 	bytes, err := ioutil.ReadAll(resp.Body)
+	s := trimToFirstDirective(preprocessICal2String(string(bytes)))
+	lines := strings.Split(s, "\n")
+	c := new(Calendar)
 
-	log.Println(string(bytes))
+	for _, l := range lines {
+		s := strings.TrimSpace(l)
+		// This is a state transition.
+		if _, ok := curr.children[s]; ok {
+			curr.children[s].populate(c, s, s)
+			curr = curr.children[s]
+			continue
+		}
 
-	return nil
+		parts := strings.Split(s, ":")
+		// This is NOT a state transition.
+		if _, ok := curr.children[parts[0]]; ok {
+			// Run extractors.
+			for _, e := range curr.children[parts[0]].extractor {
+				s = e(s)
+			}
+
+			// Populate the Calendar.
+			curr.children[parts[0]].populate(c, parts[0], s)
+			continue
+		}
+
+	}
+
+	return c, err
 }
