@@ -5,17 +5,14 @@ import "net/http"
 import "io/ioutil"
 import "log"
 
-type finalizer interface {
-	finalize(in string)
-}
-
 type node struct {
 	children  map[string]*node
 	extractor []func(in string) string
-	finalize  func(f finalizer, in string)
+	populate  func(c *Calendar, t string, val string) *Calendar
 	prev      *node
 }
 
+// Calendar represents an ICal2 Calendar.
 type Calendar struct {
 	Version  string
 	ProdID   string
@@ -35,6 +32,7 @@ func (c *Calendar) populate(t string, val string) {
 	}
 }
 
+// Event represents an ICal2 Event.
 type Event struct {
 	StartDate   int64
 	EndDate     int64
@@ -80,6 +78,7 @@ func (p *node) addChild(pat string, ext []func(in string) string, pFunc func(c *
 	c := new(node)
 	c.prev = p
 	c.extractor = ext
+	c.populate = pFunc
 	p.children[pat] = c
 	return c
 }
@@ -113,15 +112,23 @@ func initialize() {
 	curr.addChild("VERSION", splitOnlyChain, populateCalendar)
 	curr.addChild("PRODID", splitOnlyChain, populateCalendar)
 	curr.addChild("CALSCALE", splitOnlyChain, populateCalendar)
-	curr = curr.addChild("BEGIN:VEVENT", nill)
-
+	curr = curr.addChild("BEGIN:VEVENT", nil, createEvent)
+	curr.addChild("DTSTART", splitOnlyChain, populateEvent)
+	curr.addChild("DTSTAMP", splitOnlyChain, populateEvent)
+	curr.addChild("UID", splitOnlyChain, populateEvent)
+	curr.addChild("SUMMARY", splitOnlyChain, populateEvent)
+	curr.addChild("DESCRIPTION", splitOnlyChain, populateEvent)
+	curr.addChild("LOCATION", splitOnlyChain, populateEvent)
+	curr.addChild("URL", splitOnlyChain, populateEvent)
+	curr = curr.addChild("END:VEVENT", nil, createEvent)
+	curr = curr.addChild("END:VCALENDAR", nil, nil)
 }
 
 type populatable interface {
 	populate(string, string)
 }
 
-// Parse stuff.
+// ParseIcal2Url parses an ICal2 url into a Calendar.
 func ParseIcal2Url(url string) error {
 	initialize()
 
